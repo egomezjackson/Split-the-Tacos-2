@@ -109,6 +109,11 @@ input:focus{border-color:var(--marine);outline:none;}
 .code{font-size:13px;color:var(--ink2);word-break:break-all;margin:10px 0 14px;}
 
 
+.row.frozen{opacity:.62;cursor:default;}
+.row.frozen:hover{border-color:var(--stone);}
+.row.mine.frozen{opacity:.78;border-color:var(--ink);}
+.tick{color:var(--marine);font-weight:800;margin-left:5px;}
+.confirmbar{margin-top:18px;padding-top:16px;border-top:1.5px solid var(--stone);}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
 
 .prog{height:5px;background:var(--stone);border-radius:3px;overflow:hidden;margin-bottom:14px;}
