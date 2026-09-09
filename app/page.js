@@ -311,7 +311,6 @@ function BillView({ code }) {
   const [missing, setMissing] = useState(false);
   const [joinName, setJoinName] = useState("");
   const [showShare, setShowShare] = useState(false);
-  const qrRef = useRef(null);
 
   const load = useCallback(async () => {
     const [b, i, d] = await Promise.all([
@@ -343,17 +342,16 @@ function BillView({ code }) {
     return () => supabase.removeChannel(ch);
   }, [code, load]);
 
-  // Whoever made the bill lands here with the code open, ready to show.
-  useEffect(() => {
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new")) {
-      setShowShare(true);
-    }
-  }, []);
 
   const url = typeof window !== "undefined" ? window.location.origin + "/?c=" + code : "";
-  useEffect(() => {
-    if (showShare && qrRef.current && url) QRCode.toCanvas(qrRef.current, url, { width: 200, margin: 1 });
-  }, [showShare, url]);
+  // A ref callback runs the instant the canvas mounts. An effect keyed on
+  // other state can fire while the canvas doesn't exist yet, draw nothing,
+  // and never get a second chance — which is why the code used to show up
+  // only after a refresh.
+  const drawQr = useCallback(
+    (node) => { if (node && url) QRCode.toCanvas(node, url, { width: 200, margin: 1 }); },
+    [url]
+  );
 
   const join = async (n) => {
     const clean = (n || "").trim();
@@ -363,9 +361,29 @@ function BillView({ code }) {
       .from("diners")
       .insert({ bill_id: code, device_id: deviceId(), name: clean, color: PALETTE[diners.length % PALETTE.length] })
       .select().single();
-    setMe(data);
+    // Put them into local state in the same tick as setMe. Otherwise the next
+    // render has a `me` who isn't in `diners` yet, and working out the totals
+    // for a person who doesn't exist throws.
+    if (data) {
+      setDiners((ds) => (ds.some((x) => x.id === data.id) ? ds : [...ds, data]));
+      setMe(data);
+    }
     load();
   };
+
+  // Whoever made the bill lands here with the code open, ready to show.
+  const autoJoined = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!new URLSearchParams(window.location.search).get("new")) return;
+    setShowShare(true);
+    // They already gave their name on the previous screen. Put them on the
+    // bill rather than showing them a join box for a bill they just created.
+    if (!loading && !me && !autoJoined.current && savedName()) {
+      autoJoined.current = true;
+      join(savedName());
+    }
+  }, [loading, me]);
 
   const toggle = async (itemId) => {
     if (!me) return;
@@ -413,7 +431,10 @@ function BillView({ code }) {
       </Shell>
     );
 
+  // Belt and braces: a realtime update can also briefly hand us a `me` who
+  // isn't in the diner list yet. Wait a beat rather than crashing.
   const mine = s.byId[me.id];
+  if (!mine) return <Shell><p className="sub">Loading…</p></Shell>;
 
   return (
     <Shell>
@@ -428,7 +449,7 @@ function BillView({ code }) {
           <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
             Phone camera, not the app. It opens straight to this bill.
           </div>
-          <canvas ref={qrRef} />
+          <canvas ref={drawQr} />
           <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14 }}>
             <button className="btn ghost sm" onClick={() => navigator.clipboard?.writeText(url)}>
               Copy the link
@@ -501,7 +522,7 @@ function BillView({ code }) {
                 <span className="chip" style={{ background: d.color }}>{initials(d.name)}</span>
                 {d.name}
               </span>
-              <b className="num">{fmt(s.byId[d.id].total)}</b>
+              <b className="num">{fmt(s.byId[d.id]?.total ?? 0)}</b>
             </div>
           ))}
           {s.unclaimed !== 0 && (
