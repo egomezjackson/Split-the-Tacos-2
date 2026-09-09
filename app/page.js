@@ -385,8 +385,18 @@ function BillView({ code }) {
     }
   }, [loading, me]);
 
+  const setDone = async (v) => {
+    setDiners((ds) => ds.map((d) => (d.id === me.id ? { ...d, done: v } : d)));
+    setMe((m) => ({ ...m, done: v }));
+    await supabase.from("diners").update({ done: v }).eq("id", me.id);
+    load();
+  };
+
   const toggle = async (itemId) => {
-    if (!me) return;
+    // Once you've confirmed, your taps stop registering. That's the point —
+    // a stray thumb while the phone is going round the table shouldn't
+    // quietly change what someone owes.
+    if (!me || me.done) return;
     const mine = claims.some((c) => c.item_id === itemId && c.diner_id === me.id);
     // Optimistic, so tapping feels instant on restaurant wifi.
     setClaims((cs) =>
@@ -408,7 +418,11 @@ function BillView({ code }) {
     );
 
   const s = computeShares({ items, diners, claims, bill });
-  const done = s.unclaimedCount === 0 && diners.length > 0;
+  const allClaimed = s.unclaimedCount === 0 && diners.length > 0;
+  const confirmedCount = diners.filter((d) => d.done).length;
+  // Locked once everyone has said they're finished AND nothing is unclaimed.
+  // Someone joining later un-locks it automatically, since they aren't done.
+  const locked = allClaimed && diners.length > 0 && confirmedCount === diners.length;
 
   /* --- not on the bill yet --- */
   if (!me)
@@ -460,8 +474,10 @@ function BillView({ code }) {
       )}
 
       {/* ---- what you owe ---- */}
-      <div className="tot" style={{ marginBottom: 22 }}>
-        <div className="hint" style={{ marginTop: 0 }}>Your share</div>
+      <div className={"tot" + (locked ? " done" : "")} style={{ marginBottom: 22 }}>
+        <div className="hint" style={{ marginTop: 0 }}>
+          {locked ? "Final — everyone confirmed" : "Your share"}
+        </div>
         <div className="big num" style={{ margin: "4px 0 6px" }}>{fmt(mine.total)}</div>
         <div className="brk">
           {fmt(mine.sub)} for what you had, plus {fmt(mine.extra)} of the tax, tip and fees
@@ -470,7 +486,15 @@ function BillView({ code }) {
 
       {/* ---- items ---- */}
       <div className="sechead">
-        <h2>{done ? "Everything's claimed" : `${s.unclaimedCount} left to claim`}</h2>
+        <h2>
+          {locked
+            ? "Locked"
+            : me.done
+            ? "Waiting on the others"
+            : allClaimed
+            ? "Everything's claimed"
+            : `${s.unclaimedCount} left to claim`}
+        </h2>
         {!showShare && <button className="mini" onClick={() => setShowShare(true)}>show the code</button>}
       </div>
       <div className="prog">
@@ -483,8 +507,12 @@ function BillView({ code }) {
         return (
           <button
             key={it.id}
-            className={"row" + (isMine ? " mine" : "") + (on.length === 0 ? " open" : "")}
+            className={
+              "row" + (isMine ? " mine" : "") + (on.length === 0 && !locked ? " open" : "") +
+              (me.done ? " frozen" : "")
+            }
             onClick={() => toggle(it.id)}
+            disabled={me.done}
           >
             <span className="nm">{it.name || "Untitled item"}</span>
             <span className="pr num">{fmt(it.price_cents)}</span>
@@ -509,6 +537,45 @@ function BillView({ code }) {
         </div>
       )}
 
+      <div className="confirmbar">
+        {locked ? (
+          <>
+            <div className="flag marine" style={{ marginBottom: 10 }}>
+              Everyone confirmed. Amounts are final.
+            </div>
+            <button className="btn ghost" style={{ width: "100%" }} onClick={() => setDone(false)}>
+              Something&apos;s wrong — reopen it
+            </button>
+          </>
+        ) : me.done ? (
+          <>
+            <div className="hint" style={{ marginTop: 0, marginBottom: 8 }}>
+              You&apos;re done. {confirmedCount} of {diners.length} confirmed
+              {diners.filter((d) => !d.done).length <= 3 && (
+                <> · waiting on {diners.filter((d) => !d.done).map((d) => d.name).join(", ")}</>
+              )}
+            </div>
+            <button className="btn ghost" style={{ width: "100%" }} onClick={() => setDone(false)}>
+              Change my picks
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              className="btn"
+              style={{ width: "100%" }}
+              onClick={() => setDone(true)}
+            >
+              That&apos;s everything I had — {fmt(mine.total)}
+            </button>
+            <div className="hint">
+              Locks your picks so a stray tap can&apos;t change them.
+              {confirmedCount > 0 && ` ${confirmedCount} of ${diners.length} confirmed so far.`}
+            </div>
+          </>
+        )}
+      </div>
+
       {/* ---- everyone ---- */}
       <div className="sec">
         <div className="sechead">
@@ -521,6 +588,7 @@ function BillView({ code }) {
               <span style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ink)" }}>
                 <span className="chip" style={{ background: d.color }}>{initials(d.name)}</span>
                 {d.name}
+                {d.done && <span className="tick">\u2713</span>}
               </span>
               <b className="num">{fmt(s.byId[d.id]?.total ?? 0)}</b>
             </div>
@@ -549,9 +617,11 @@ function BillView({ code }) {
             <div className="val num">{fmt(mine.total)}</div>
           </div>
           <div className="right">
-            <div className="lbl">{done ? "All claimed" : `${s.unclaimedCount} unclaimed`}</div>
-            <div className="val num" style={{ color: done ? "#7FD6BE" : "#F2C572" }}>
-              {done ? "✓" : fmt(s.unclaimed)}
+            <div className="lbl">
+              {locked ? "Locked" : `${confirmedCount}/${diners.length} confirmed`}
+            </div>
+            <div className="val num" style={{ color: locked ? "#7FD6BE" : "#F2C572" }}>
+              {locked ? "✓" : s.unclaimedCount > 0 ? fmt(s.unclaimed) : "—"}
             </div>
           </div>
         </div>
